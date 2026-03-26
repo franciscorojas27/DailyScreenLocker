@@ -1,24 +1,72 @@
 package main
 
 import (
+	"fmt"
+	"sync"
 	"time"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
+type Job struct {
+	Name     string
+	GoalDate time.Time
+}
+
+func LockWorkStation() {
+	user := windows.NewLazySystemDLL("user32.dll")
+	lockWorkStation := user.NewProc("LockWorkStation")
+	ret, _, err := lockWorkStation.Call()
+
+	if ret == 0 {
+		fmt.Printf("\nError trying to lock the screen: %v\n", err)
+	} else {
+		fmt.Println("\n[!] Windows was blocked")
+	}
+}
+
 func main() {
-	for {
-		ahora := time.Now()
-		// Meta: Hoy a las 17:00 (5 PM)
-		meta := time.Date(ahora.Year(), ahora.Month(), ahora.Day(), 17, 00, 0, 0, ahora.Location())
+	var mu sync.RWMutex
 
-		if ahora.After(meta) {
-			meta = meta.AddDate(0, 0, 1)
+	now := time.Now()
+	goal := time.Date(now.Year(), now.Month(), now.Day(), 17, 0, 0, 0, now.Location())
+
+	if now.After(goal) {
+		goal = goal.AddDate(0, 0, 1)
+	}
+
+	job := Job{
+		Name:     "BlockScreen",
+		GoalDate: goal,
+	}
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			mu.RLock()
+			target := job.GoalDate
+			mu.RUnlock()
+
+			timeLeft := time.Until(target)
+			fmt.Printf("\r[+] Next block screen: %v    ", timeLeft.Round(time.Second))
 		}
+	}()
 
-		time.Sleep(time.Until(meta))
+	for {
+		mu.RLock()
+		target := job.GoalDate
+		mu.RUnlock()
 
-		syscall.NewLazyDLL("user32.dll").NewProc("LockWorkStation").Call()
+		time.Sleep(time.Until(target))
 
-		time.Sleep(1 * time.Minute)
+		LockWorkStation()
+
+		mu.Lock()
+		job.GoalDate = job.GoalDate.AddDate(0, 0, 1)
+		mu.Unlock()
+
+		time.Sleep(2 * time.Second)
 	}
 }
